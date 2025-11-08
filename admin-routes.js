@@ -1,4 +1,4 @@
-// admin-routes.js - Rotas administrativas separadas
+// admin-routes.js - Rotas administrativas com serviços gratuitos
 import 'dotenv/config';
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
@@ -7,7 +7,6 @@ const adminRouter = express.Router();
 
 // Configurações
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'admin-secret-token';
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || '';
 
 // Supabase
 const supabase = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '', {
@@ -34,34 +33,168 @@ function authAdmin(req, res, next) {
 ========================= */
 const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-// Calcular distância usando Google Maps API
-async function calcularDistancia(origem, destino) {
-  if (!GOOGLE_MAPS_API_KEY) {
-    return { error: 'API Key do Google Maps não configurada' };
-  }
+// Endereço fixo do mercado
+const ENDERECO_MERCADO = 'Km 91, AL-220, 948 - Sen. Arnon de Melo, Arapiraca - AL, 57315-745';
+const COORDENADAS_MERCADO = { lat: -9.7512, lon: -36.6574 };
 
+// Geocodificação usando Nominatim (OpenStreetMap) - Gratuito
+async function geocodificarEndereco(endereco) {
   try {
+    // Delay para respeitar a política de uso do Nominatim
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
     const response = await fetch(
-      `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(origem)}&destinations=${encodeURIComponent(destino)}&key=${GOOGLE_MAPS_API_KEY}&language=pt-BR`
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(endereco)}&limit=1&countrycodes=br&addressdetails=1`,
+      {
+        headers: {
+          'User-Agent': 'SistemaRHCurriculos/1.0',
+          'Accept-Language': 'pt-BR,pt;q=0.9'
+        }
+      }
     );
     
     const data = await response.json();
     
-    if (data.status === 'OK' && data.rows[0].elements[0].status === 'OK') {
-      const element = data.rows[0].elements[0];
+    if (data && data.length > 0) {
       return {
-        distancia: element.distance.text,
-        duracao: element.duration.text,
-        distancia_metros: element.distance.value,
-        duracao_segundos: element.duration.value
+        lat: parseFloat(data[0].lat),
+        lon: parseFloat(data[0].lon),
+        endereco: data[0].display_name,
+        tipo: data[0].type,
+        importancia: data[0].importance
       };
-    } else {
-      return { error: 'Não foi possível calcular a distância' };
     }
+    return null;
   } catch (error) {
-    return { error: 'Erro ao calcular distância: ' + error.message };
+    console.error('Erro na geocodificação:', error);
+    return null;
   }
 }
+
+// Calcular distância em linha reta usando a fórmula de Haversine
+function calcularDistanciaEmLinhaReta(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Raio da Terra em km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const distancia = R * c;
+  return distancia;
+}
+
+// Calcular tempo estimado baseado na distância e tipo de área
+function calcularTempoEstimado(distanciaKm, cidadeOrigem) {
+  // Verificar se é na mesma cidade
+  const mesmaCidade = cidadeOrigem.toLowerCase().includes('arapiraca');
+  
+  if (mesmaCidade) {
+    // Em mesma cidade, velocidade média de 30km/h
+    const tempoMinutos = Math.round((distanciaKm / 30) * 60);
+    return Math.max(tempoMinutos, 5); // Mínimo 5 minutos
+  } else {
+    // Entre cidades, velocidade média de 60km/h
+    const tempoMinutos = Math.round((distanciaKm / 60) * 60);
+    return Math.max(tempoMinutos, 15); // Mínimo 15 minutos
+  }
+}
+
+/* =========================
+   POST /api/admin/calcular-distancia
+========================= */
+adminRouter.post('/calcular-distancia', authAdmin, asyncRoute(async (req, res) => {
+  const { enderecoCandidato, enderecoTrabalho = ENDERECO_MERCADO } = req.body;
+
+  if (!enderecoCandidato) {
+    return res.status(400).json({ message: 'Endereço do candidato é obrigatório.' });
+  }
+
+  try {
+    // Geocodificar endereço do candidato
+    const coordsCandidato = await geocodificarEndereco(enderecoCandidato);
+    
+    if (!coordsCandidato) {
+      return res.status(400).json({ 
+        message: 'Não foi possível encontrar o endereço do candidato. Verifique se o endereço está completo.' 
+      });
+    }
+
+    // Usar coordenadas fixas do mercado
+    const distanciaKm = calcularDistanciaEmLinhaReta(
+      coordsCandidato.lat,
+      coordsCandidato.lon,
+      COORDENADAS_MERCADO.lat,
+      COORDENADAS_MERCADO.lon
+    );
+
+    // Calcular tempo estimado
+    const tempoMinutos = calcularTempoEstimado(distanciaKm, enderecoCandidato);
+
+    // Formatar resposta
+    const resposta = {
+      distancia: `${distanciaKm.toFixed(1)} km`,
+      duracao: `${tempoMinutos} minutos`,
+      distancia_km: parseFloat(distanciaKm.toFixed(1)),
+      duracao_minutos: tempoMinutos,
+      metodo: 'calculadora_gratuita',
+      coordenadas_candidato: coordsCandidato,
+      observacao: 'Distância calculada em linha reta. Tempo estimado considerando tráfego local.'
+    };
+
+    // Adicionar observação específica se for muito próximo
+    if (distanciaKm < 2) {
+      resposta.observacao += ' Localização muito próxima do mercado.';
+    } else if (distanciaKm > 50) {
+      resposta.observacao += ' Candidato em cidade diferente.';
+    }
+
+    res.json(resposta);
+
+  } catch (error) {
+    console.error('[DISTANCIA] Erro:', error);
+    res.status(500).json({ message: 'Erro ao calcular distância.' });
+  }
+}));
+
+/* =========================
+   GET /api/admin/geolocalizacao
+========================= */
+adminRouter.get('/geolocalizacao', authAdmin, asyncRoute(async (req, res) => {
+  res.json({
+    enderecoTrabalho: ENDERECO_MERCADO,
+    coordenadas: {
+      lat: COORDENADAS_MERCADO.lat,
+      lng: COORDENADAS_MERCADO.lon
+    },
+    nomeLocal: 'Mercado Arapiraca - AL'
+  });
+}));
+
+/* =========================
+   GET /api/admin/geocodificar
+========================= */
+adminRouter.get('/geocodificar', authAdmin, asyncRoute(async (req, res) => {
+  const { endereco } = req.query;
+  
+  if (!endereco) {
+    return res.status(400).json({ message: 'Endereço é obrigatório.' });
+  }
+
+  try {
+    const resultado = await geocodificarEndereco(endereco);
+    
+    if (!resultado) {
+      return res.status(404).json({ message: 'Endereço não encontrado.' });
+    }
+
+    res.json(resultado);
+  } catch (error) {
+    console.error('[GEOCODIFICAR] Erro:', error);
+    res.status(500).json({ message: 'Erro ao geocodificar endereço.' });
+  }
+}));
 
 /* =========================
    GET /api/admin/stats
@@ -125,6 +258,12 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
         return { data: Object.entries(counts).map(([transporte, count]) => ({ transporte, count })) };
       });
 
+    // Candidatos de Arapiraca
+    const { count: arapiracaCount, error: arapiracaError } = await supabase
+      .from('candidaturas')
+      .select('*', { count: 'exact', head: true })
+      .ilike('cidade', '%arapiraca%');
+
     // Evolução dos últimos 7 dias
     const evolucao = [];
     for (let i = 6; i >= 0; i--) {
@@ -148,6 +287,7 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
     res.json({
       total: total || 0,
       ultimos30Dias: ultimos30Dias || 0,
+      arapiraca: arapiracaCount || 0,
       porVaga: porVaga.data || [],
       porCidade: porCidade.data || [],
       porTransporte: porTransporte.data || [],
@@ -396,45 +536,6 @@ adminRouter.get('/filtros', authAdmin, asyncRoute(async (req, res) => {
     console.error('[ADMIN FILTROS] Erro:', error);
     res.status(500).json({ message: 'Erro ao buscar opções de filtro.' });
   }
-}));
-
-/* =========================
-   POST /api/admin/calcular-distancia
-========================= */
-adminRouter.post('/calcular-distancia', authAdmin, asyncRoute(async (req, res) => {
-  const { enderecoCandidato, enderecoTrabalho } = req.body;
-
-  if (!enderecoCandidato || !enderecoTrabalho) {
-    return res.status(400).json({ message: 'Endereço do candidato e do trabalho são obrigatórios.' });
-  }
-
-  try {
-    const resultado = await calcularDistancia(enderecoCandidato, enderecoTrabalho);
-    
-    if (resultado.error) {
-      return res.status(400).json({ message: resultado.error });
-    }
-
-    res.json(resultado);
-  } catch (error) {
-    console.error('[DISTANCIA] Erro:', error);
-    res.status(500).json({ message: 'Erro ao calcular distância.' });
-  }
-}));
-
-/* =========================
-   GET /api/admin/geolocalizacao
-========================= */
-adminRouter.get('/geolocalizacao', authAdmin, asyncRoute(async (req, res) => {
-  // Esta rota pode ser usada para obter a localização atual do mercado/trabalho
-  // Em produção, isso viria de uma configuração do sistema
-  res.json({
-    enderecoTrabalho: process.env.ENDERECO_TRABALHO || 'Av. Paulista, 1000 - São Paulo, SP',
-    coordenadas: {
-      lat: process.env.LAT_TRABALHO || -23.563,
-      lng: process.env.LNG_TRABALHO || -46.654
-    }
-  });
 }));
 
 export default adminRouter;
