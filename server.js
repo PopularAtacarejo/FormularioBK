@@ -1,5 +1,4 @@
-// server.js — completo (Express + Supabase + CORS allowlist + validações + 409 formal)
-
+// server.js — completo com rotas administrativas
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -7,6 +6,7 @@ import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { createClient } from '@supabase/supabase-js';
 import mime from 'mime-types';
+import adminRouter from './admin-routes.js';
 
 /* =========================
    CONFIG & SAFETY CHECKS
@@ -18,7 +18,7 @@ if (missing.length) {
 }
 
 const PORT = Number(process.env.PORT || 10000);
-const RAW_ORIGINS = process.env.CORS_ORIGIN || '*'; // "http://localhost:5500,https://seu-front.com"
+const RAW_ORIGINS = process.env.CORS_ORIGIN || '*';
 const ALLOWLIST = RAW_ORIGINS.split(',').map((s) => s.trim());
 const MAX_FILE_MB = Math.max(1, Number(process.env.MAX_FILE_MB || 5));
 const RETENTION_DAYS = Math.max(1, Number(process.env.RETENTION_DAYS || 90));
@@ -47,9 +47,9 @@ app.use((req, res, next) => {
 app.use(
   cors({
     origin: (origin, cb) => {
-      if (!origin) return cb(null, true); // curl/postman
+      if (!origin) return cb(null, true);
       if (origin === 'null' && (ALLOWLIST.includes('*') || ALLOWLIST.includes('null'))) {
-        return cb(null, true); // somente se configurado
+        return cb(null, true);
       }
       if (ALLOWLIST.includes('*') || ALLOWLIST.includes(origin)) {
         return cb(null, true);
@@ -138,7 +138,7 @@ const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next
 /* =========================
    RATE LIMIT leve
 ========================= */
-const buckets = new Map(); // ip -> { ts, count }
+const buckets = new Map();
 const WINDOW_MS = 60_000;
 const MAX_REQ = 30;
 function rateLimit(req, res, next) {
@@ -294,6 +294,11 @@ app.post('/internal/cleanup', asyncRoute(async (req, res) => {
 }));
 
 /* =========================
+   ROTAS ADMINISTRATIVAS
+========================= */
+app.use('/api/admin', adminRouter);
+
+/* =========================
    404 & ERROR HANDLERS
 ========================= */
 app.use((req, res) => res.status(404).json({ message: 'Rota não encontrada.' }));
@@ -317,4 +322,5 @@ app.use((err, req, res, next) => {
 ========================= */
 app.listen(PORT, () => {
   console.log(`API porta ${PORT} | Retention ${RETENTION_DAYS}d | Bucket ${BUCKET} | CORS_ORIGIN: ${RAW_ORIGINS}`);
+  console.log(`Sistema administrativo disponível em: http://localhost:${PORT}/admin.html`);
 });
