@@ -1,4 +1,4 @@
-// server.js — completo com sistema de wake-on-request
+// server.js — correção do erro de login
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -25,6 +25,7 @@ const RETENTION_DAYS = Math.max(1, Number(process.env.RETENTION_DAYS || 90));
 const BUCKET = process.env.SUPABASE_BUCKET || 'curriculos';
 const CLEANUP_TOKEN = process.env.CLEANUP_TOKEN || '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+const ADMIN_TOKEN = 'admin-secret-token';
 
 // Estatísticas do servidor
 const serverStats = {
@@ -39,6 +40,10 @@ const serverStats = {
    APP & MIDDLEWARES
 ========================= */
 const app = express();
+
+// MIDDLEWARE CRUCIAL: Parse JSON antes de tudo
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Headers de segurança leves
 app.use((req, res, next) => {
@@ -74,6 +79,7 @@ app.options('*', cors());
 app.use((req, res, next) => {
   const start = Date.now();
   serverStats.totalRequests++;
+  console.log(`${req.method} ${req.originalUrl}`, req.body ? 'com body' : 'sem body');
   res.on('finish', () => {
     console.info(`${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now()-start}ms)`);
   });
@@ -208,24 +214,34 @@ function rateLimit(req, res, next) {
 }
 
 /* =========================
-   POST /api/admin/login
+   POST /api/admin/login - CORRIGIDO
 ========================= */
 app.post('/api/admin/login', asyncRoute(async (req, res) => {
-  const { password } = req.body;
+  try {
+    console.log('📨 Recebendo requisição de login:', req.body);
+    
+    const { password } = req.body;
 
-  if (!password) {
-    return res.status(400).json({ message: 'Senha é obrigatória.' });
-  }
+    if (!password) {
+      console.log('❌ Senha não fornecida');
+      return res.status(400).json({ message: 'Senha é obrigatória.' });
+    }
 
-  if (password === ADMIN_PASSWORD) {
-    const token = 'admin-secret-token';
-    res.json({ 
-      ok: true, 
-      message: 'Login realizado com sucesso.',
-      token: token
-    });
-  } else {
-    res.status(401).json({ message: 'Senha incorreta.' });
+    console.log('🔐 Comparando senha...');
+    if (password === ADMIN_PASSWORD) {
+      console.log('✅ Login bem-sucedido');
+      res.json({ 
+        ok: true, 
+        message: 'Login realizado com sucesso.',
+        token: ADMIN_TOKEN
+      });
+    } else {
+      console.log('❌ Senha incorreta');
+      res.status(401).json({ message: 'Senha incorreta.' });
+    }
+  } catch (error) {
+    console.error('💥 ERRO NO LOGIN:', error);
+    res.status(500).json({ message: 'Erro interno no servidor durante o login.' });
   }
 }));
 
@@ -400,7 +416,8 @@ app.use((err, req, res, next) => {
 ========================= */
 app.listen(PORT, () => {
   console.log(`🚀 API porta ${PORT} | Retention ${RETENTION_DAYS}d | Bucket ${BUCKET}`);
-  console.log(`📊 Painel admin: http://localhost:${PORT}/admin.html`);
+  console.log(`🔐 Admin password: ${ADMIN_PASSWORD}`);
+  console.log(`📊 Painel admin disponível`);
   console.log(`❤️  Healthcheck: http://localhost:${PORT}/health`);
   console.log(`🔍 Status: http://localhost:${PORT}/status`);
 });
