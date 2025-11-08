@@ -1,4 +1,4 @@
-// server.js — completo com rotas administrativas
+// server.js — completo com sistema de wake-on-request
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -24,6 +24,16 @@ const MAX_FILE_MB = Math.max(1, Number(process.env.MAX_FILE_MB || 5));
 const RETENTION_DAYS = Math.max(1, Number(process.env.RETENTION_DAYS || 90));
 const BUCKET = process.env.SUPABASE_BUCKET || 'curriculos';
 const CLEANUP_TOKEN = process.env.CLEANUP_TOKEN || '';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+
+// Estatísticas do servidor
+const serverStats = {
+  startTime: new Date(),
+  totalRequests: 0,
+  healthChecks: 0,
+  lastHealthCheck: null,
+  isWakingUp: false
+};
 
 /* =========================
    APP & MIDDLEWARES
@@ -63,12 +73,58 @@ app.options('*', cors());
 // Logs simples
 app.use((req, res, next) => {
   const start = Date.now();
-  res.on('finish', () => console.info(`${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now()-start}ms)`));
+  serverStats.totalRequests++;
+  res.on('finish', () => {
+    console.info(`${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now()-start}ms)`);
+  });
   next();
 });
 
-// Healthcheck
-app.get('/health', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+// Healthcheck melhorado
+app.get('/health', (req, res) => {
+  serverStats.healthChecks++;
+  serverStats.lastHealthCheck = new Date();
+  
+  res.json({ 
+    ok: true, 
+    ts: new Date().toISOString(),
+    uptime: process.uptime(),
+    stats: {
+      totalRequests: serverStats.totalRequests,
+      healthChecks: serverStats.healthChecks
+    }
+  });
+});
+
+// Wake-up endpoint
+app.get('/wakeup', (req, res) => {
+  serverStats.isWakingUp = true;
+  console.log('🔄 Servidor recebendo solicitação de wake-up');
+  
+  // Simular processo de wake-up (se necessário)
+  setTimeout(() => {
+    serverStats.isWakingUp = false;
+  }, 5000);
+  
+  res.json({ 
+    ok: true, 
+    message: 'Servidor acordando...',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Endpoint de status do servidor
+app.get('/status', (req, res) => {
+  res.json({
+    status: 'online',
+    startTime: serverStats.startTime,
+    uptime: process.uptime(),
+    totalRequests: serverStats.totalRequests,
+    healthChecks: serverStats.healthChecks,
+    lastHealthCheck: serverStats.lastHealthCheck,
+    isWakingUp: serverStats.isWakingUp
+  });
+});
 
 // Supabase
 const supabase = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '', {
@@ -150,6 +206,28 @@ function rateLimit(req, res, next) {
   if (b.count > MAX_REQ) return res.status(429).json({ message: 'Muitas requisições. Tente novamente em instantes.' });
   next();
 }
+
+/* =========================
+   POST /api/admin/login
+========================= */
+app.post('/api/admin/login', asyncRoute(async (req, res) => {
+  const { password } = req.body;
+
+  if (!password) {
+    return res.status(400).json({ message: 'Senha é obrigatória.' });
+  }
+
+  if (password === ADMIN_PASSWORD) {
+    const token = 'admin-secret-token';
+    res.json({ 
+      ok: true, 
+      message: 'Login realizado com sucesso.',
+      token: token
+    });
+  } else {
+    res.status(401).json({ message: 'Senha incorreta.' });
+  }
+}));
 
 /* =========================
    GET /api/vagas
@@ -321,6 +399,8 @@ app.use((err, req, res, next) => {
    START
 ========================= */
 app.listen(PORT, () => {
-  console.log(`API porta ${PORT} | Retention ${RETENTION_DAYS}d | Bucket ${BUCKET} | CORS_ORIGIN: ${RAW_ORIGINS}`);
-  console.log(`Sistema administrativo disponível em: http://localhost:${PORT}/admin.html`);
+  console.log(`🚀 API porta ${PORT} | Retention ${RETENTION_DAYS}d | Bucket ${BUCKET}`);
+  console.log(`📊 Painel admin: http://localhost:${PORT}/admin.html`);
+  console.log(`❤️  Healthcheck: http://localhost:${PORT}/health`);
+  console.log(`🔍 Status: http://localhost:${PORT}/status`);
 });
