@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "NODE_ENV=development nodemon server.js"
+    "dev": "NODE_ENV=development nodemon server.js",
+    "admin": "node server.js --admin"
   },
   "engines": {
     "node": ">=18.x"
@@ -29,7 +30,9 @@
     "express",
     "curriculos",
     "api",
-    "backend"
+    "backend",
+    "admin",
+    "arapiraca"
   ],
   "author": "Jeferson",
   "license": "MIT"
