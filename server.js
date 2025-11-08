@@ -152,6 +152,24 @@ function rateLimit(req, res, next) {
 }
 
 /* =========================
+   GET /api/vagas
+========================= */
+app.get('/api/vagas', asyncRoute(async (req, res) => {
+  const { data, error } = await supabase
+    .from('vagas')
+    .select('id, nome, ativa')
+    .eq('ativa', true)
+    .order('nome', { ascending: true });
+
+  if (error) {
+    console.error('[VAGAS] Erro ao buscar:', error);
+    return res.status(500).json({ message: 'Erro ao buscar vagas disponíveis.' });
+  }
+
+  res.json(data || []);
+}));
+
+/* =========================
    POST /api/enviar
 ========================= */
 app.post('/api/enviar', rateLimit, upload.single('arquivo'), asyncRoute(async (req, res) => {
@@ -194,7 +212,7 @@ app.post('/api/enviar', rateLimit, upload.single('arquivo'), asyncRoute(async (r
       ok: false,
       reason: 'duplicate',
       message:
-        `Identificamos que já existe uma candidatura registrada para a vaga “${existed[0].vaga}” com o mesmo CPF, enviada em ${toBR(enviado)}. ` +
+        `Identificamos que já existe uma candidatura registrada para a vaga "${existed[0].vaga}" com o mesmo CPF, enviada em ${toBR(enviado)}. ` +
         `Conforme nossa política, é necessário aguardar ${daysLeft} dia(s), até ${toBR(reapplyDate)}, para realizar um novo envio.`,
       enviado_em: enviado.toISOString(),
       pode_reenviar_em: reapplyDate.toISOString(),
@@ -229,7 +247,7 @@ app.post('/api/enviar', rateLimit, upload.single('arquivo'), asyncRoute(async (r
         ok: false,
         reason: 'duplicate',
         message:
-          `Identificamos que já existe uma candidatura registrada para a vaga “${body.vaga}” com o mesmo CPF. ` +
+          `Identificamos que já existe uma candidatura registrada para a vaga "${body.vaga}" com o mesmo CPF. ` +
           `Aguarde o período de ${RETENTION_DAYS} dia(s) antes de reenviar.`,
       });
     }
