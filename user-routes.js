@@ -1,14 +1,9 @@
-// user-routes.js - Sistema completo de usuários, status e comentários
+// user-routes.js - Sistema completo migrado para Supabase Auth
 import 'dotenv/config';
 import express from 'express';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { createClient } from '@supabase/supabase-js';
 
 const userRouter = express.Router();
-
-// Configurações
-const JWT_SECRET = process.env.JWT_SECRET || 'seu-jwt-secreto-aqui';
 
 // Supabase
 const supabase = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '', {
@@ -36,9 +31,9 @@ const STATUS_CANDIDATURA = {
 };
 
 /* =========================
-   MIDDLEWARE DE AUTENTICAÇÃO
+   MIDDLEWARE DE AUTENTICAÇÃO SUPABASE
 ========================= */
-function authUser(req, res, next) {
+async function authUser(req, res, next) {
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -48,11 +43,43 @@ function authUser(req, res, next) {
   const token = authHeader.substring(7);
   
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
+    // Verificar token com Supabase
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    
+    if (error || !user) {
+      return res.status(401).json({ message: 'Token inválido ou expirado.' });
+    }
+
+    // Buscar informações adicionais na tabela usuarios
+    const { data: usuario, error: userError } = await supabase
+      .from('usuarios')
+      .select('*')
+      .eq('auth_id', user.id)
+      .single();
+
+    if (userError || !usuario) {
+      return res.status(401).json({ message: 'Usuário não encontrado no sistema.' });
+    }
+
+    // Verificar se usuário está ativo
+    if (!usuario.ativo) {
+      return res.status(401).json({ message: 'Usuário desativado. Contate o administrador.' });
+    }
+
+    req.user = {
+      id: usuario.id,
+      auth_id: user.id,
+      email: user.email,
+      nome: usuario.nome,
+      cargo: usuario.cargo,
+      funcao: usuario.funcao,
+      nivel: usuario.nivel
+    };
+    
     next();
   } catch (error) {
-    return res.status(401).json({ message: 'Token inválido ou expirado.' });
+    console.error('[AUTH MIDDLEWARE] Erro:', error);
+    return res.status(401).json({ message: 'Token inválido.' });
   }
 }
 
@@ -86,7 +113,7 @@ function authAnalista(req, res, next) {
 const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 /* =========================
-   ROTAS DE AUTENTICAÇÃO
+   ROTAS DE AUTENTICAÇÃO SUPABASE
 ========================= */
 
 // POST /api/users/login
@@ -98,59 +125,66 @@ userRouter.post('/login', asyncRoute(async (req, res) => {
   }
 
   try {
-    // Buscar usuário pelo email
-    const { data: user, error } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('email', email.toLowerCase())
-      .single();
+    // Fazer login via Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email: email.toLowerCase(),
+      password: password
+    });
 
-    if (error || !user) {
+    if (authError || !authData.user) {
+      console.log('[LOGIN] Erro Supabase Auth:', authError?.message);
       return res.status(401).json({ message: 'Credenciais inválidas.' });
     }
 
-    // Verificar senha
-    const validPassword = await bcrypt.compare(password, user.senha);
-    if (!validPassword) {
-      return res.status(401).json({ message: 'Credenciais inválidas.' });
+    // Buscar informações adicionais do usuário
+    const { data: usuario, error: userError } = await supabase
+      .from('usuarios')
+      .select('*')
+      .eq('auth_id', authData.user.id)
+      .single();
+
+    if (userError || !usuario) {
+      console.log('[LOGIN] Usuário não encontrado na tabela usuarios para auth_id:', authData.user.id);
+      return res.status(401).json({ message: 'Usuário não encontrado no sistema.' });
     }
 
     // Verificar se usuário está ativo
-    if (!user.ativo) {
+    if (!usuario.ativo) {
       return res.status(401).json({ message: 'Usuário desativado. Contate o administrador.' });
     }
-
-    // Gerar token JWT
-    const token = jwt.sign(
-      { 
-        id: user.id, 
-        email: user.email, 
-        nome: user.nome,
-        cargo: user.cargo,
-        funcao: user.funcao,
-        nivel: user.nivel
-      },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
 
     res.json({
       ok: true,
       message: 'Login realizado com sucesso.',
-      token,
+      token: authData.session.access_token, // Token do Supabase
       user: {
-        id: user.id,
-        nome: user.nome,
-        email: user.email,
-        cargo: user.cargo,
-        funcao: user.funcao,
-        nivel: user.nivel
+        id: usuario.id,
+        nome: usuario.nome,
+        email: authData.user.email,
+        cargo: usuario.cargo,
+        funcao: usuario.funcao,
+        nivel: usuario.nivel
       }
     });
 
   } catch (error) {
     console.error('[USER LOGIN] Erro:', error);
     res.status(500).json({ message: 'Erro interno no servidor.' });
+  }
+}));
+
+// POST /api/users/logout
+userRouter.post('/logout', authUser, asyncRoute(async (req, res) => {
+  try {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error('[LOGOUT] Erro:', error);
+    }
+    
+    res.json({ ok: true, message: 'Logout realizado com sucesso.' });
+  } catch (error) {
+    console.error('[LOGOUT] Erro:', error);
+    res.status(500).json({ message: 'Erro ao fazer logout.' });
   }
 }));
 
@@ -181,31 +215,20 @@ userRouter.put('/change-password', authUser, asyncRoute(async (req, res) => {
   }
 
   try {
-    // Buscar usuário atual
-    const { data: user, error } = await supabase
-      .from('usuarios')
-      .select('senha')
-      .eq('id', req.user.id)
-      .single();
+    // Verificar a senha atual tentando fazer login
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email: req.user.email,
+      password: currentPassword
+    });
 
-    if (error || !user) {
-      return res.status(404).json({ message: 'Usuário não encontrado.' });
-    }
-
-    // Verificar senha atual
-    const validPassword = await bcrypt.compare(currentPassword, user.senha);
-    if (!validPassword) {
+    if (authError) {
       return res.status(401).json({ message: 'Senha atual incorreta.' });
     }
 
-    // Hash da nova senha
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    // Atualizar senha
-    const { error: updateError } = await supabase
-      .from('usuarios')
-      .update({ senha: hashedPassword })
-      .eq('id', req.user.id);
+    // Atualizar senha no Supabase Auth
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword
+    });
 
     if (updateError) {
       throw updateError;
@@ -216,6 +239,79 @@ userRouter.put('/change-password', authUser, asyncRoute(async (req, res) => {
   } catch (error) {
     console.error('[CHANGE PASSWORD] Erro:', error);
     res.status(500).json({ message: 'Erro ao alterar senha.' });
+  }
+}));
+
+/* =========================
+   SINCRONIZAÇÃO DE USUÁRIOS
+========================= */
+
+// POST /api/users/sync - Sincronizar usuários do Supabase Auth
+userRouter.post('/sync', authUser, authAdmin, asyncRoute(async (req, res) => {
+  try {
+    // Buscar todos os usuários do Supabase Auth
+    const { data: authUsers, error: authError } = await supabase.auth.admin.listUsers();
+    
+    if (authError) throw authError;
+
+    let synced = 0;
+    let updated = 0;
+    let errors = [];
+
+    for (const authUser of authUsers.users) {
+      // Verificar se usuário já existe na tabela usuarios
+      const { data: existingUser } = await supabase
+        .from('usuarios')
+        .select('id, email')
+        .eq('auth_id', authUser.id)
+        .single();
+
+      if (!existingUser) {
+        // Criar usuário na tabela usuarios
+        const { error: insertError } = await supabase
+          .from('usuarios')
+          .insert([{
+            auth_id: authUser.id,
+            email: authUser.email,
+            nome: authUser.user_metadata?.name || authUser.email.split('@')[0],
+            cargo: 'Analista',
+            funcao: 'Analista de RH',
+            nivel: 'analista',
+            ativo: true,
+            criado_em: new Date().toISOString()
+          }]);
+
+        if (insertError) {
+          errors.push(`${authUser.email}: ${insertError.message}`);
+        } else {
+          synced++;
+        }
+      } else {
+        // Atualizar email se necessário
+        if (existingUser.email !== authUser.email) {
+          const { error: updateError } = await supabase
+            .from('usuarios')
+            .update({ email: authUser.email })
+            .eq('id', existingUser.id);
+
+          if (!updateError) {
+            updated++;
+          }
+        }
+      }
+    }
+
+    res.json({
+      ok: true,
+      message: `Sincronização concluída. ${synced} novos usuários, ${updated} atualizados.`,
+      synced,
+      updated,
+      errors: errors.length > 0 ? errors : undefined
+    });
+
+  } catch (error) {
+    console.error('[SYNC USERS] Erro:', error);
+    res.status(500).json({ message: 'Erro ao sincronizar usuários.' });
   }
 }));
 
@@ -571,7 +667,7 @@ userRouter.get('/candidaturas/:id', authAnalista, asyncRoute(async (req, res) =>
 userRouter.get('/', authUser, authAdmin, asyncRoute(async (req, res) => {
   const { data: usuarios, error } = await supabase
     .from('usuarios')
-    .select('id, nome, email, cargo, funcao, nivel, ativo, criado_em')
+    .select('id, nome, email, cargo, funcao, nivel, ativo, criado_em, auth_id')
     .order('nome');
 
   if (error) {
@@ -599,26 +695,27 @@ userRouter.post('/', authUser, authAdmin, asyncRoute(async (req, res) => {
   }
 
   try {
-    // Verificar se email já existe
-    const { data: usuarioExistente, error: checkError } = await supabase
-      .from('usuarios')
-      .select('id')
-      .eq('email', email.toLowerCase())
-      .single();
+    // Criar usuário no Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email: email.toLowerCase(),
+      password: password,
+      email_confirm: true
+    });
 
-    if (usuarioExistente) {
-      return res.status(409).json({ message: 'Já existe um usuário com este email.' });
+    if (authError) {
+      if (authError.message.includes('already registered')) {
+        return res.status(409).json({ message: 'Já existe um usuário com este email.' });
+      }
+      throw authError;
     }
 
-    // Hash da senha
-    const hashedPassword = await bcrypt.hash(password, 10);
-
+    // Criar usuário na tabela usuarios
     const novoUsuario = {
+      auth_id: authData.user.id,
       nome: nome.trim(),
       email: email.toLowerCase().trim(),
       cargo: cargo.trim(),
       funcao: funcao.trim(),
-      senha: hashedPassword,
       nivel: nivel,
       ativo: true,
       criado_em: new Date().toISOString()
@@ -627,10 +724,12 @@ userRouter.post('/', authUser, authAdmin, asyncRoute(async (req, res) => {
     const { data, error } = await supabase
       .from('usuarios')
       .insert([novoUsuario])
-      .select('id, nome, email, cargo, funcao, nivel, ativo, criado_em')
+      .select('id, nome, email, cargo, funcao, nivel, ativo, criado_em, auth_id')
       .single();
 
     if (error) {
+      // Se der erro, rollback: excluir o usuário do auth
+      await supabase.auth.admin.deleteUser(authData.user.id);
       throw error;
     }
 
@@ -648,6 +747,29 @@ userRouter.put('/:id', authUser, authAdmin, asyncRoute(async (req, res) => {
   const { nome, email, cargo, funcao, nivel, ativo } = req.body;
 
   try {
+    // Buscar usuário para obter auth_id
+    const { data: usuario, error: fetchError } = await supabase
+      .from('usuarios')
+      .select('auth_id, email')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !usuario) {
+      return res.status(404).json({ message: 'Usuário não encontrado.' });
+    }
+
+    // Atualizar email no Supabase Auth se necessário
+    if (email && email !== usuario.email) {
+      const { error: authError } = await supabase.auth.admin.updateUserById(
+        usuario.auth_id,
+        { email: email.toLowerCase() }
+      );
+
+      if (authError) {
+        throw authError;
+      }
+    }
+
     const updates = {
       nome: nome?.trim(),
       email: email?.toLowerCase().trim(),
@@ -669,15 +791,11 @@ userRouter.put('/:id', authUser, authAdmin, asyncRoute(async (req, res) => {
       .from('usuarios')
       .update(updates)
       .eq('id', id)
-      .select('id, nome, email, cargo, funcao, nivel, ativo, criado_em')
+      .select('id, nome, email, cargo, funcao, nivel, ativo, criado_em, auth_id')
       .single();
 
     if (error) {
       throw error;
-    }
-
-    if (!data) {
-      return res.status(404).json({ message: 'Usuário não encontrado.' });
     }
 
     res.json(data);
@@ -698,6 +816,24 @@ userRouter.delete('/:id', authUser, authAdmin, asyncRoute(async (req, res) => {
   }
 
   try {
+    // Buscar usuário para obter auth_id
+    const { data: usuario, error: fetchError } = await supabase
+      .from('usuarios')
+      .select('auth_id')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !usuario) {
+      return res.status(404).json({ message: 'Usuário não encontrado.' });
+    }
+
+    // Excluir do Supabase Auth
+    const { error: authError } = await supabase.auth.admin.deleteUser(usuario.auth_id);
+    if (authError) {
+      throw authError;
+    }
+
+    // Excluir da tabela usuarios
     const { error } = await supabase
       .from('usuarios')
       .delete()
