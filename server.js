@@ -6,8 +6,6 @@ import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { createClient } from '@supabase/supabase-js';
 import mime from 'mime-types';
-import adminRouter from './admin-routes.js';
-import userRouter from './user-routes.js';
 
 /* =========================
    CONFIG & SAFETY CHECKS
@@ -212,6 +210,42 @@ function rateLimit(req, res, next) {
   b.count++; buckets.set(ip, b);
   if (b.count > MAX_REQ) return res.status(429).json({ message: 'Muitas requisições. Tente novamente em instantes.' });
   next();
+}
+
+/* =========================
+   IMPORT DINÂMICO DOS ROUTERS
+========================= */
+let adminRouter;
+let userRouter;
+
+// Carregar admin-routes
+try {
+  console.log('📁 Tentando carregar admin-routes.js...');
+  const adminModule = await import('./admin-routes.js');
+  adminRouter = adminModule.default;
+  console.log('✅ admin-routes.js carregado com sucesso');
+} catch (error) {
+  console.error('❌ Erro ao carregar admin-routes.js:', error.message);
+  // Fallback: criar router básico
+  adminRouter = express.Router();
+  adminRouter.get('*', (req, res) => {
+    res.status(503).json({ message: 'Sistema administrativo temporariamente indisponível' });
+  });
+}
+
+// Carregar user-routes  
+try {
+  console.log('📁 Tentando carregar user-routes.js...');
+  const userModule = await import('./user-routes.js');
+  userRouter = userModule.default;
+  console.log('✅ user-routes.js carregado com sucesso');
+} catch (error) {
+  console.error('❌ Erro ao carregar user-routes.js:', error.message);
+  // Fallback: criar router básico
+  userRouter = express.Router();
+  userRouter.get('*', (req, res) => {
+    res.status(503).json({ message: 'Sistema de usuários temporariamente indisponível' });
+  });
 }
 
 /* =========================
