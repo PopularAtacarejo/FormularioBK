@@ -1,4 +1,4 @@
-// admin-routes.js - Rotas administrativas com serviços gratuitos
+// admin-routes.js - Rotas administrativas atualizadas
 import 'dotenv/config';
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
@@ -284,6 +284,19 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
       });
     }
 
+    // Estatísticas por status
+    const { data: porStatus, error: porStatusError } = await supabase
+      .from('candidaturas')
+      .select('status')
+      .then(({ data, error }) => {
+        if (error) throw error;
+        const counts = {};
+        data.forEach(({ status }) => {
+          counts[status] = (counts[status] || 0) + 1;
+        });
+        return { data: Object.entries(counts).map(([status, count]) => ({ status, count })) };
+      });
+
     res.json({
       total: total || 0,
       ultimos30Dias: ultimos30Dias || 0,
@@ -291,6 +304,7 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
       porVaga: porVaga.data || [],
       porCidade: porCidade.data || [],
       porTransporte: porTransporte.data || [],
+      porStatus: porStatus.data || [],
       evolucao
     });
 
@@ -304,18 +318,22 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
    GET /api/admin/candidaturas
 ========================= */
 adminRouter.get('/candidaturas', authAdmin, asyncRoute(async (req, res) => {
-  const { page = 1, limit = 20, vaga, cidade, transporte, data_inicio, data_fim, search } = req.query;
+  const { page = 1, limit = 20, vaga, cidade, transporte, data_inicio, data_fim, search, status } = req.query;
   const offset = (page - 1) * limit;
 
   let query = supabase
     .from('candidaturas')
-    .select('*', { count: 'exact' })
+    .select(`
+      *,
+      usuario_status:usuarios!status_alterado_por(nome, email, cargo, funcao, nivel)
+    `, { count: 'exact' })
     .order('enviado_em', { ascending: false });
 
   // Aplicar filtros
   if (vaga && vaga !== 'todas') query = query.eq('vaga', vaga);
   if (cidade && cidade !== 'todas') query = query.ilike('cidade', `%${cidade}%`);
   if (transporte && transporte !== 'todos') query = query.eq('transporte', transporte);
+  if (status && status !== 'todos') query = query.eq('status', status);
   if (search) {
     query = query.or(`nome.ilike.%${search}%,email.ilike.%${search}%,cpf.ilike.%${search}%`);
   }
@@ -352,7 +370,10 @@ adminRouter.get('/candidaturas/:id', authAdmin, asyncRoute(async (req, res) => {
 
   const { data, error } = await supabase
     .from('candidaturas')
-    .select('*')
+    .select(`
+      *,
+      usuario_status:usuarios!status_alterado_por(nome, email, cargo, funcao, nivel)
+    `)
     .eq('id', id)
     .single();
 
@@ -523,13 +544,23 @@ adminRouter.get('/filtros', authAdmin, asyncRoute(async (req, res) => {
         return { data: unique.filter(Boolean) };
       });
 
-    if (vagasError || cidadesError) {
-      throw vagasError || cidadesError;
+    const { data: status, error: statusError } = await supabase
+      .from('candidaturas')
+      .select('status')
+      .then(({ data, error }) => {
+        if (error) throw error;
+        const unique = [...new Set(data.map(item => item.status))];
+        return { data: unique.filter(Boolean) };
+      });
+
+    if (vagasError || cidadesError || statusError) {
+      throw vagasError || cidadesError || statusError;
     }
 
     res.json({
       vagas: vagas.data,
-      cidades: cidades.data
+      cidades: cidades.data,
+      status: status.data
     });
 
   } catch (error) {
