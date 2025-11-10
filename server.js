@@ -1,4 +1,4 @@
-// server.js — correção do erro de login
+// server.js — sistema completo com usuários e status
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -7,6 +7,7 @@ import { nanoid } from 'nanoid';
 import { createClient } from '@supabase/supabase-js';
 import mime from 'mime-types';
 import adminRouter from './admin-routes.js';
+import userRouter from './user-routes.js';
 
 /* =========================
    CONFIG & SAFETY CHECKS
@@ -331,6 +332,7 @@ app.post('/api/enviar', rateLimit, upload.single('arquivo'), asyncRoute(async (r
     transporte: body.transporte, vaga: body.vaga,
     arquivo_path: fileId, arquivo_url: signedData?.signedUrl || null,
     enviado_em: new Date(body.data).toISOString(),
+    status: 'Novo' // Status inicial
   };
 
   const { error: dbErr } = await supabase.from('candidaturas').insert(payloadDB);
@@ -393,6 +395,11 @@ app.post('/internal/cleanup', asyncRoute(async (req, res) => {
 app.use('/api/admin', adminRouter);
 
 /* =========================
+   ROTAS DE USUÁRIOS
+========================= */
+app.use('/api/users', userRouter);
+
+/* =========================
    404 & ERROR HANDLERS
 ========================= */
 app.use((req, res) => res.status(404).json({ message: 'Rota não encontrada.' }));
@@ -418,6 +425,7 @@ app.listen(PORT, () => {
   console.log(`🚀 API porta ${PORT} | Retention ${RETENTION_DAYS}d | Bucket ${BUCKET}`);
   console.log(`🔐 Admin password: ${ADMIN_PASSWORD}`);
   console.log(`📊 Painel admin disponível`);
+  console.log(`👥 Sistema de usuários disponível`);
   console.log(`❤️  Healthcheck: http://localhost:${PORT}/health`);
   console.log(`🔍 Status: http://localhost:${PORT}/status`);
 });
