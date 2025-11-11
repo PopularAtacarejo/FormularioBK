@@ -230,10 +230,24 @@ adminRouter.get('/geocodificar', authAdmin, asyncRoute(async (req, res) => {
    GET /api/admin/stats
 ========================= */
 adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
+  const { data_inicio, data_fim } = req.query;
+  
   try {
+    let queryBase = supabase.from('candidaturas');
+
+    // Aplicar filtro de data se fornecido
+    if (data_inicio && data_fim) {
+      const inicio = new Date(data_inicio);
+      const fim = new Date(data_fim);
+      fim.setHours(23, 59, 59, 999);
+      
+      queryBase = queryBase
+        .gte('enviado_em', inicio.toISOString())
+        .lte('enviado_em', fim.toISOString());
+    }
+
     // Total de candidaturas
-    const { count: total, error: totalError } = await supabase
-      .from('candidaturas')
+    const { count: total, error: totalError } = await queryBase
       .select('*', { count: 'exact', head: true });
 
     if (totalError) throw totalError;
@@ -247,9 +261,8 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
       .select('*', { count: 'exact', head: true })
       .gte('enviado_em', trintaDiasAtras.toISOString());
 
-    // Candidaturas por vaga
-    const { data: porVaga, error: porVagaError } = await supabase
-      .from('candidaturas')
+    // Candidaturas por vaga (top 10)
+    const { data: porVaga, error: porVagaError } = await queryBase
       .select('vaga')
       .then(({ data, error }) => {
         if (error) throw error;
@@ -257,12 +270,16 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
         data.forEach(({ vaga }) => {
           counts[vaga] = (counts[vaga] || 0) + 1;
         });
-        return { data: Object.entries(counts).map(([vaga, count]) => ({ vaga, count })).sort((a, b) => b.count - a.count) };
+        return { 
+          data: Object.entries(counts)
+            .map(([vaga, count]) => ({ vaga, count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 10)
+        };
       });
 
-    // Candidaturas por cidade
-    const { data: porCidade, error: porCidadeError } = await supabase
-      .from('candidaturas')
+    // Candidaturas por cidade (top 15)
+    const { data: porCidade, error: porCidadeError } = await queryBase
       .select('cidade')
       .then(({ data, error }) => {
         if (error) throw error;
@@ -270,12 +287,16 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
         data.forEach(({ cidade }) => {
           counts[cidade] = (counts[cidade] || 0) + 1;
         });
-        return { data: Object.entries(counts).map(([cidade, count]) => ({ cidade, count })).sort((a, b) => b.count - a.count).slice(0, 10) };
+        return { 
+          data: Object.entries(counts)
+            .map(([cidade, count]) => ({ cidade, count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 15)
+        };
       });
 
     // Status de transporte
-    const { data: porTransporte, error: porTransporteError } = await supabase
-      .from('candidaturas')
+    const { data: porTransporte, error: porTransporteError } = await queryBase
       .select('transporte')
       .then(({ data, error }) => {
         if (error) throw error;
@@ -289,8 +310,7 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
       });
 
     // Candidatos de Arapiraca
-    const { count: arapiracaCount, error: arapiracaError } = await supabase
-      .from('candidaturas')
+    const { count: arapiracaCount, error: arapiracaError } = await queryBase
       .select('*', { count: 'exact', head: true })
       .ilike('cidade', '%arapiraca%');
 
@@ -302,11 +322,28 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
       const inicioDia = new Date(data.setHours(0, 0, 0, 0));
       const fimDia = new Date(data.setHours(23, 59, 59, 999));
       
-      const { count, error } = await supabase
+      let queryDia = supabase
         .from('candidaturas')
         .select('*', { count: 'exact', head: true })
         .gte('enviado_em', inicioDia.toISOString())
         .lte('enviado_em', fimDia.toISOString());
+
+      // Aplicar filtro de data se fornecido
+      if (data_inicio && data_fim) {
+        const inicioFiltro = new Date(data_inicio);
+        const fimFiltro = new Date(data_fim);
+        fimFiltro.setHours(23, 59, 59, 999);
+        
+        if (inicioDia < inicioFiltro || inicioDia > fimFiltro) {
+          evolucao.push({
+            data: data.toLocaleDateString('pt-BR'),
+            count: 0
+          });
+          continue;
+        }
+      }
+
+      const { count, error } = await queryDia;
 
       evolucao.push({
         data: data.toLocaleDateString('pt-BR'),
@@ -315,8 +352,7 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
     }
 
     // Estatísticas por status
-    const { data: porStatus, error: porStatusError } = await supabase
-      .from('candidaturas')
+    const { data: porStatus, error: porStatusError } = await queryBase
       .select('status')
       .then(({ data, error }) => {
         if (error) throw error;
@@ -327,6 +363,24 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
         return { data: Object.entries(counts).map(([status, count]) => ({ status, count })) };
       });
 
+    // Candidaturas por bairro (top 10)
+    const { data: porBairro, error: porBairroError } = await queryBase
+      .select('bairro, cidade')
+      .then(({ data, error }) => {
+        if (error) throw error;
+        const counts = {};
+        data.forEach(({ bairro, cidade }) => {
+          const chave = `${bairro} - ${cidade}`;
+          counts[chave] = (counts[chave] || 0) + 1;
+        });
+        return { 
+          data: Object.entries(counts)
+            .map(([local, count]) => ({ local, count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 10)
+        };
+      });
+
     res.json({
       total: total || 0,
       ultimos30Dias: ultimos30Dias || 0,
@@ -335,7 +389,12 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
       porCidade: porCidade.data || [],
       porTransporte: porTransporte.data || [],
       porStatus: porStatus.data || [],
-      evolucao
+      porBairro: porBairro.data || [],
+      evolucao,
+      periodo: {
+        data_inicio: data_inicio || null,
+        data_fim: data_fim || null
+      }
     });
 
   } catch (error) {
@@ -348,7 +407,21 @@ adminRouter.get('/stats', authAdmin, asyncRoute(async (req, res) => {
    GET /api/admin/candidaturas
 ========================= */
 adminRouter.get('/candidaturas', authAdmin, asyncRoute(async (req, res) => {
-  const { page = 1, limit = 20, vaga, cidade, transporte, data_inicio, data_fim, search, status } = req.query;
+  const { 
+    page = 1, 
+    limit = 20, 
+    vaga, 
+    cidade, 
+    transporte, 
+    data_inicio, 
+    data_fim, 
+    search, 
+    status,
+    bairro,
+    cep,
+    estado 
+  } = req.query;
+  
   const offset = (page - 1) * limit;
 
   let query = supabase
@@ -364,8 +437,11 @@ adminRouter.get('/candidaturas', authAdmin, asyncRoute(async (req, res) => {
   if (cidade && cidade !== 'todas') query = query.ilike('cidade', `%${cidade}%`);
   if (transporte && transporte !== 'todos') query = query.eq('transporte', transporte);
   if (status && status !== 'todos') query = query.eq('status', status);
+  if (bairro && bairro !== 'todos') query = query.ilike('bairro', `%${bairro}%`);
+  if (estado && estado !== 'todos') query = query.ilike('cidade', `%${estado}%`);
+  
   if (search) {
-    query = query.or(`nome.ilike.%${search}%,email.ilike.%${search}%,cpf.ilike.%${search}%`);
+    query = query.or(`nome.ilike.%${search}%,email.ilike.%${search}%,cpf.ilike.%${search}%,telefone.ilike.%${search}%`);
   }
   
   if (data_inicio) {
@@ -416,7 +492,59 @@ adminRouter.get('/candidaturas/:id', authAdmin, asyncRoute(async (req, res) => {
     return res.status(404).json({ message: 'Candidatura não encontrada.' });
   }
 
+  // Gerar URL assinada para o arquivo
+  if (data.arquivo_path) {
+    const { data: signedUrl } = await supabase.storage
+      .from('curriculos')
+      .createSignedUrl(data.arquivo_path, 3600); // 1 hora
+
+    data.arquivo_url_assinada = signedUrl?.signedUrl || null;
+  }
+
   res.json(data);
+}));
+
+/* =========================
+   GET /api/admin/curriculo/:id
+========================= */
+adminRouter.get('/curriculo/:id', authAdmin, asyncRoute(async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Buscar candidatura para obter o arquivo_path
+    const { data: candidatura, error: candidaturaError } = await supabase
+      .from('candidaturas')
+      .select('arquivo_path, nome')
+      .eq('id', id)
+      .single();
+
+    if (candidaturaError || !candidatura) {
+      return res.status(404).json({ message: 'Candidatura não encontrada.' });
+    }
+
+    if (!candidatura.arquivo_path) {
+      return res.status(404).json({ message: 'Currículo não encontrado.' });
+    }
+
+    // Gerar URL assinada para download
+    const { data: signedUrl, error: signedError } = await supabase.storage
+      .from('curriculos')
+      .createSignedUrl(candidatura.arquivo_path, 3600); // 1 hora
+
+    if (signedError) {
+      throw signedError;
+    }
+
+    res.json({
+      url: signedUrl.signedUrl,
+      nome_arquivo: `${candidatura.nome}_curriculo.pdf`,
+      tipo: 'application/pdf'
+    });
+
+  } catch (error) {
+    console.error('[ADMIN CURRICULO] Erro:', error);
+    res.status(500).json({ message: 'Erro ao buscar currículo.' });
+  }
 }));
 
 /* =========================
@@ -574,6 +702,15 @@ adminRouter.get('/filtros', authAdmin, asyncRoute(async (req, res) => {
         return { data: unique.filter(Boolean) };
       });
 
+    const { data: bairros, error: bairrosError } = await supabase
+      .from('candidaturas')
+      .select('bairro, cidade')
+      .then(({ data, error }) => {
+        if (error) throw error;
+        const unique = [...new Set(data.map(item => `${item.bairro} - ${item.cidade}`))];
+        return { data: unique.filter(Boolean) };
+      });
+
     const { data: status, error: statusError } = await supabase
       .from('candidaturas')
       .select('status')
@@ -583,13 +720,14 @@ adminRouter.get('/filtros', authAdmin, asyncRoute(async (req, res) => {
         return { data: unique.filter(Boolean) };
       });
 
-    if (vagasError || cidadesError || statusError) {
-      throw vagasError || cidadesError || statusError;
+    if (vagasError || cidadesError || statusError || bairrosError) {
+      throw vagasError || cidadesError || statusError || bairrosError;
     }
 
     res.json({
       vagas: vagas.data,
       cidades: cidades.data,
+      bairros: bairros.data,
       status: status.data
     });
 
