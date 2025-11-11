@@ -108,8 +108,7 @@ function calcularDistanciaEmLinhaReta(lat1, lon1, lat2, lon2) {
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = 
     Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2);
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   const distancia = R * c;
   return distancia;
@@ -466,6 +465,41 @@ adminRouter.get('/candidaturas', authAdmin, asyncRoute(async (req, res) => {
     page: Number(page),
     totalPages: Math.ceil(count / limit)
   });
+}));
+
+/* =========================
+   PUT /api/admin/candidaturas/:id/status
+========================= */
+adminRouter.put('/candidaturas/:id/status', authAdmin, asyncRoute(async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body; // Novo status a ser aplicado
+  
+  // Validação básica
+  if (!status) {
+    return res.status(400).json({ message: 'O novo status é obrigatório.' });
+  }
+
+  // O campo status_alterado_por é o ID do usuário Admin logado (req.user.auth_id)
+  const { data, error } = await supabase
+    .from('candidaturas')
+    .update({ 
+      status, 
+      status_alterado_em: new Date().toISOString(),
+      status_alterado_por: req.user.auth_id 
+    })
+    .eq('id', id)
+    .select();
+
+  if (error) {
+    console.error('[ADMIN STATUS] Erro ao atualizar status:', error);
+    return res.status(500).json({ message: 'Erro ao atualizar status da candidatura.' });
+  }
+
+  if (data.length === 0) {
+    return res.status(404).json({ message: 'Candidatura não encontrada.' });
+  }
+
+  res.json(data[0]);
 }));
 
 /* =========================
