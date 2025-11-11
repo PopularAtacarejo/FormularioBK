@@ -5,27 +5,57 @@ import { createClient } from '@supabase/supabase-js';
 
 const adminRouter = express.Router();
 
-// Configurações
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'admin-secret-token';
-
 // Supabase
 const supabase = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '', {
   auth: { persistSession: false },
 });
 
 /* =========================
-   MIDDLEWARE DE AUTENTICAÇÃO ADMIN
+   MIDDLEWARE DE AUTENTICAÇÃO ADMIN SUPABASE
 ========================= */
-function authAdmin(req, res, next) {
+async function authAdmin(req, res, next) {
   const authHeader = req.headers.authorization;
+  
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ message: 'Token de autenticação necessário.' });
   }
+
   const token = authHeader.substring(7);
-  if (token !== ADMIN_TOKEN) {
+  
+  try {
+    // Verificar token com Supabase
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    
+    if (error || !user) {
+      return res.status(401).json({ message: 'Token inválido ou expirado.' });
+    }
+
+    // Buscar informações do usuário na tabela usuarios
+    const { data: usuario, error: userError } = await supabase
+      .from('usuarios')
+      .select('*')
+      .eq('auth_id', user.id)
+      .single();
+
+    if (userError || !usuario) {
+      return res.status(401).json({ message: 'Usuário não encontrado no sistema.' });
+    }
+
+    // Verificar se usuário está ativo e é admin
+    if (!usuario.ativo) {
+      return res.status(401).json({ message: 'Usuário desativado. Contate o administrador.' });
+    }
+
+    if (usuario.nivel !== 'admin') {
+      return res.status(403).json({ message: 'Acesso restrito a administradores.' });
+    }
+
+    req.user = usuario;
+    next();
+  } catch (error) {
+    console.error('[AUTH ADMIN] Erro:', error);
     return res.status(401).json({ message: 'Token inválido.' });
   }
-  next();
 }
 
 /* =========================
