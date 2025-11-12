@@ -1,3 +1,4 @@
+// server.js — sistema completo com usuários e status
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -5,12 +6,11 @@ import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { createClient } from '@supabase/supabase-js';
 import mime from 'mime-types';
-import jwt from 'jsonwebtoken';
 
 /* =========================
    CONFIG & SAFETY CHECKS
 ========================= */
-const REQUIRED_ENVS = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_BUCKET', 'SUPABASE_JWT_SECRET'];
+const REQUIRED_ENVS = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_BUCKET'];
 const missing = REQUIRED_ENVS.filter((k) => !process.env[k]);
 if (missing.length) {
   console.warn('[WARN] Variáveis de ambiente ausentes:', missing.join(', '));
@@ -83,14 +83,13 @@ app.use((req, res, next) => {
   next();
 });
 
-/* =========================
-   HEALTH / WAKE / STATUS
-========================= */
+// Healthcheck melhorado
 app.get('/health', (req, res) => {
   serverStats.healthChecks++;
   serverStats.lastHealthCheck = new Date();
-  res.json({
-    ok: true,
+  
+  res.json({ 
+    ok: true, 
     ts: new Date().toISOString(),
     uptime: process.uptime(),
     stats: {
@@ -100,13 +99,24 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Wake-up endpoint
 app.get('/wakeup', (req, res) => {
   serverStats.isWakingUp = true;
   console.log('🔄 Servidor recebendo solicitação de wake-up');
-  setTimeout(() => { serverStats.isWakingUp = false; }, 5000);
-  res.json({ ok: true, message: 'Servidor acordando...', timestamp: new Date().toISOString() });
+  
+  // Simular processo de wake-up (se necessário)
+  setTimeout(() => {
+    serverStats.isWakingUp = false;
+  }, 5000);
+  
+  res.json({ 
+    ok: true, 
+    message: 'Servidor acordando...',
+    timestamp: new Date().toISOString()
+  });
 });
 
+// Endpoint de status do servidor
 app.get('/status', (req, res) => {
   res.json({
     status: 'online',
@@ -119,16 +129,12 @@ app.get('/status', (req, res) => {
   });
 });
 
-/* =========================
-   SUPABASE
-========================= */
+// Supabase
 const supabase = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '', {
   auth: { persistSession: false },
 });
 
-/* =========================
-   UPLOAD
-========================= */
+// Upload
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_MB * 1024 * 1024 },
@@ -182,7 +188,7 @@ function validatePayload(p) {
   if (!isEmail(p.email)) return { ok: false, message: 'E-mail inválido.' };
   if (!isCPF(p.cpf)) return { ok: false, message: 'CPF inválido.' };
   if (p.nome.length > 180 || p.email.length > 180 || p.cidade.length > 120 || p.bairro.length > 120 || p.rua.length > 180 || p.vaga.length > 180)
-    return { ok: true };
+    return { ok: false, message: 'Alguns campos excedem o tamanho permitido.' };
   return { ok: true };
 }
 
@@ -205,55 +211,6 @@ function rateLimit(req, res, next) {
 }
 
 /* =========================
-   AUTHZ por "nivel" na tabela usuarios
-========================= */
-function requireAuth(req, res, next) {
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token) return res.status(401).json({ message: 'Sem token' });
-  try {
-    const payload = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
-    req.user = { id: payload.sub, email: payload.email };
-    next();
-  } catch (e) {
-    return res.status(401).json({ message: 'Token inválido' });
-  }
-}
-
-// Se allowAnyAuthenticated=true: qualquer usuário "ativo" na tabela pode acessar
-function requirePerfil({ allowAnyAuthenticated = false, niveisPermitidos = ['admin'] } = {}) {
-  return async (req, res, next) => {
-    try {
-      const authId = req.user?.id;
-      if (!authId) return res.status(401).json({ message: 'Sem usuário' });
-
-      const { data, error } = await supabase
-        .from('usuarios')
-        .select('status, nivel')
-        .eq('auth_id', authId)
-        .single();
-
-      if (error) {
-        console.error('[authz] erro ao obter perfil:', error.message);
-        return res.status(500).json({ message: 'Erro ao buscar perfil do usuário' });
-      }
-
-      const ativo = String(data?.status || '').toLowerCase() === 'ativo';
-      const nivel = String(data?.nivel || '').toLowerCase();
-
-      if (!ativo) return res.status(403).json({ message: 'Usuário inativo' });
-      if (allowAnyAuthenticated || niveisPermitidos.includes(nivel)) {
-        return next();
-      }
-      return res.status(403).json({ message: 'Acesso restrito. Permissão insuficiente.' });
-    } catch (e) {
-      console.error('[authz] falha:', e);
-      return res.status(500).json({ message: 'Falha de autorização', detail: e.message });
-    }
-  };
-}
-
-/* =========================
    IMPORT DINÂMICO DOS ROUTERS
 ========================= */
 let adminRouter;
@@ -267,6 +224,7 @@ try {
   console.log('✅ admin-routes.js carregado com sucesso');
 } catch (error) {
   console.error('❌ Erro ao carregar admin-routes.js:', error.message);
+  // Fallback: criar router básico
   adminRouter = express.Router();
   adminRouter.get('*', (req, res) => {
     res.status(503).json({ message: 'Sistema administrativo temporariamente indisponível' });
@@ -281,6 +239,7 @@ try {
   console.log('✅ user-routes.js carregado com sucesso');
 } catch (error) {
   console.error('❌ Erro ao carregar user-routes.js:', error.message);
+  // Fallback: criar router básico
   userRouter = express.Router();
   userRouter.get('*', (req, res) => {
     res.status(503).json({ message: 'Sistema de usuários temporariamente indisponível' });
@@ -288,7 +247,7 @@ try {
 }
 
 /* =========================
-   GET /api/vagas (pública)
+   GET /api/vagas
 ========================= */
 app.get('/api/vagas', asyncRoute(async (req, res) => {
   const { data, error } = await supabase
@@ -301,11 +260,12 @@ app.get('/api/vagas', asyncRoute(async (req, res) => {
     console.error('[VAGAS] Erro ao buscar:', error);
     return res.status(500).json({ message: 'Erro ao buscar vagas disponíveis.' });
   }
+
   res.json(data || []);
 }));
 
 /* =========================
-   POST /api/enviar (pública, com rate limit)
+   POST /api/enviar
 ========================= */
 app.post('/api/enviar', rateLimit, upload.single('arquivo'), asyncRoute(async (req, res) => {
   const body = {
@@ -397,7 +357,7 @@ app.post('/api/enviar', rateLimit, upload.single('arquivo'), asyncRoute(async (r
 }));
 
 /* =========================
-   POST /internal/cleanup (protegido por token)
+   POST /internal/cleanup
 ========================= */
 app.post('/internal/cleanup', asyncRoute(async (req, res) => {
   if (!CLEANUP_TOKEN || req.header('X-CRON-TOKEN') !== CLEANUP_TOKEN) {
@@ -422,6 +382,7 @@ app.post('/internal/cleanup', asyncRoute(async (req, res) => {
     const ids = rows.map(r => r.id);
     const { error: delErr } = await supabase.from('candidaturas').delete().in('id', ids);
     if (delErr) return res.status(500).json({ ok:false, message:'Falha ao excluir registros do banco.' });
+
     removed += rows.length;
   }
 
@@ -429,15 +390,14 @@ app.post('/internal/cleanup', asyncRoute(async (req, res) => {
 }));
 
 /* =========================
-   ROTAS ADMINISTRATIVAS (proteger por perfil)
+   ROTAS ADMINISTRATIVAS
 ========================= */
-// 👉 Qualquer usuário logado e ATIVO pode acessar (mude allowAnyAuthenticated para false se quiser só admin/editor)
-app.use('/api/admin', requireAuth, requirePerfil({ allowAnyAuthenticated: true }), adminRouter);
+app.use('/api/admin', adminRouter);
 
 /* =========================
-   ROTAS DE USUÁRIOS (proteger por perfil também)
+   ROTAS DE USUÁRIOS
 ========================= */
-app.use('/api/users', requireAuth, requirePerfil({ allowAnyAuthenticated: true }), userRouter);
+app.use('/api/users', userRouter);
 
 /* =========================
    404 & ERROR HANDLERS
