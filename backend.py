@@ -817,18 +817,18 @@ async def enviar_curriculo(
     if len(experiencias_list) > 10:
         raise HTTPException(status_code=400, detail="Máximo de 10 experiências permitidas")
 
-    # Validar cada experiência
+    # Validar cada experiência (CORREÇÃO APLICADA AQUI)
     for exp in experiencias_list:
-        # Verificar campos obrigatórios
+        # Verificar campos obrigatórios com os nomes corretos
         if not all(key in exp for key in ['empresa', 'funcao', 'data_admissao']):
             raise HTTPException(status_code=400, detail="Dados de experiência incompletos")
         
-        # Validar datas
+        # Validar datas com os nomes corretos
         try:
             datetime.strptime(exp['data_admissao'], "%Y-%m-%d")
             if exp.get('data_demissao'):
                 datetime.strptime(exp['data_demissao'], "%Y-%m-%d")
-        except:
+        except ValueError:
             raise HTTPException(status_code=400, detail="Formato de data inválido nas experiências")
     
     try:
